@@ -16,8 +16,12 @@ genius = lyricsgenius.Genius(
     remove_section_headers=True,
 )
 
-input_json_path = "part-00000-c13c6767-e1f0-4adf-bab8-6e210485f360-c000.json"
-output_csv_path = "csv/tracks_with_lyrics.csv"
+import os
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+input_json_path = os.path.join(PROJECT_ROOT, "data", "top1000HitSongs.json")
+output_csv_path = os.path.join(PROJECT_ROOT, "data", "tracks_with_lyrics.csv")
 
 # 每多少首歌保存一次中间结果
 CHECKPOINT_EVERY = 100
