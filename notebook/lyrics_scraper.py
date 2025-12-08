@@ -6,8 +6,8 @@ import pandas as pd
 import lyricsgenius
 from tqdm import tqdm
 
-# ========== 0. 基本配置 ==========
-client_access_token = "3AhYPPIL5RQbybxGO0UvFk2OH_ZHkiN6w07CVwy9WNrLzxN0qhBDW2rIRkV8041e"  # ⚠️ 换成你自己的 token
+# ========== 0. Basic Configuration ==========
+client_access_token = "3AhYPPIL5RQbybxGO0UvFk2OH_ZHkiN6w07CVwy9WNrLzxN0qhBDW2rIRkV8041e"  # ⚠️ Replace with your own token
 
 genius = lyricsgenius.Genius(
     client_access_token,
@@ -23,13 +23,13 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 input_json_path = os.path.join(PROJECT_ROOT, "data", "top1000HitSongs.json")
 output_csv_path = os.path.join(PROJECT_ROOT, "data", "tracks_with_lyrics.csv")
 
-# 每多少首歌保存一次中间结果
+# Save intermediate results every N songs
 CHECKPOINT_EVERY = 100
 
-# 如果你想测试用，先限制数量；想全部跑就设为 None
-MAX_SONGS = None  # 比如只跑 500 首就写 500
+# If you want to test, limit the number; set to None to process all
+MAX_SONGS = None  # For example, set 500 if you only want to run 500 songs
 
-# ========== 1. 读取 JSON（每行一首歌） ==========
+# ========== 1. Read JSON (one song per line) ==========
 tracks = []
 with open(input_json_path, "r", encoding="utf-8") as f:
     for line in f:
@@ -39,19 +39,19 @@ with open(input_json_path, "r", encoding="utf-8") as f:
         data = json.loads(line)
         tracks.append(data)
 
-print(f"从 JSON 读取到 {len(tracks)} 首歌")
+print(f"Read {len(tracks)} songs from JSON")
 
-# ========== 2. 载入已有 CSV，做断点续爬 + 避免重复失败 ==========
-results = []  # 用来保存“本轮 + 历史”的所有结果记录
-processed_keys = set()        # 所有已经处理过的 (track_name, artist_name)
-processed_success = set()     # 成功拿到歌词的 key
-processed_error = set()       # 有 error 的 key
+# ========== 2. Load existing CSV for checkpointing + avoiding repeated failures ==========
+results = []  # Used to store all results (current run + history)
+processed_keys = set()        # All processed (track_name, artist_name)
+processed_success = set()     # Keys that successfully retrieved lyrics
+processed_error = set()       # Keys that had an error
 
 if os.path.exists(output_csv_path):
-    print(f"检测到已有文件：{output_csv_path}，尝试断点续爬...")
+    print(f"Detected existing file: {output_csv_path}, attempting to resume crawling...")
     df_existing = pd.read_csv(output_csv_path)
 
-    # 把已有的记录都放进 results 里，后面会继续往里 append
+    # Put existing records into results; later we will append new ones
     results = df_existing.to_dict(orient="records")
 
     for _, row in df_existing.iterrows():
@@ -64,26 +64,26 @@ if os.path.exists(output_csv_path):
         lyrics_old = row.get("lyrics")
         error_old = row.get("error")
 
-        # 有歌词算成功
+        # Has lyrics → success
         if isinstance(lyrics_old, str) and lyrics_old.strip() != "":
             processed_success.add(key)
-        # 没歌词但有 error，算失败过
+        # No lyrics but has error → considered failed
         elif isinstance(error_old, str) and error_old.strip() != "":
             processed_error.add(key)
 
-    print(f"已存在记录数：{len(results)}")
-    print(f"其中成功：{len(processed_success)}，失败：{len(processed_error)}")
+    print(f"Existing records: {len(results)}")
+    print(f"Success: {len(processed_success)}, Failed: {len(processed_error)}")
 else:
-    print("未检测到已有 CSV，将从头开始爬取。")
+    print("No existing CSV detected. Starting from scratch.")
 
-# 当前已有的结果数量（用于计算 checkpoint）
+# Current number of results (used for checkpoint calculation)
 current_count = len(results)
 
-# ========== 3. 主循环：抓歌词 + 自动跳过 + 中间保存 ==========
-new_fetched = 0  # 统计本次新抓取的数量
+# ========== 3. Main Loop: fetch lyrics + auto skip + intermediate save ==========
+new_fetched = 0  # Count of newly fetched songs in this run
 
 for i, item in enumerate(tqdm(tracks, desc="Fetching lyrics")):
-    # 如果设置了 MAX_SONGS，就在这里限制总处理量（包括已经有的）
+    # If MAX_SONGS is set, limit total processed amount (including history)
     if MAX_SONGS is not None and (new_fetched + len(processed_keys)) >= MAX_SONGS:
         break
 
@@ -93,9 +93,9 @@ for i, item in enumerate(tqdm(tracks, desc="Fetching lyrics")):
 
     key = (str(track_name), str(artist_name))
 
-    # 1) 自动跳过已经爬过的歌曲（无论之前成功还是失败）
+    # 1) Auto-skip songs already processed (whether success or failure)
     if key in processed_keys:
-        # 如果你想将“失败过”的歌重新尝试，可以在这里改逻辑
+        # If you want to retry failed songs, modify logic here
         continue
 
     lyrics = None
@@ -118,7 +118,7 @@ for i, item in enumerate(tqdm(tracks, desc="Fetching lyrics")):
         "error": error_msg,
     })
 
-    # 更新状态集合
+    # Update state sets
     processed_keys.add(key)
     if lyrics is not None and lyrics.strip() != "":
         processed_success.add(key)
@@ -128,17 +128,17 @@ for i, item in enumerate(tqdm(tracks, desc="Fetching lyrics")):
     new_fetched += 1
     current_count += 1
 
-    # 2) 每 100 首自动保存中间文件
+    # 2) Auto-save every 100 songs
     if current_count % CHECKPOINT_EVERY == 0:
         df_checkpoint = pd.DataFrame(results)
         df_checkpoint.to_csv(output_csv_path, index=False)
-        print(f"\nCheckpoint 已保存：共 {current_count} 条记录（包括历史 + 本次）")
+        print(f"\nCheckpoint saved: {current_count} records (including history + current run)")
 
-    # 3) 随机 sleep 5~15 秒，防止被限流
+    # 3) Random sleep 3–6 seconds to avoid rate limits
     time.sleep(random.uniform(3, 6))
 
-# ========== 4. 最后一轮保存 ==========
+# ========== 4. Final save ==========
 df_final = pd.DataFrame(results)
 df_final.to_csv(output_csv_path, index=False)
-print(f"\n全部完成！最终共保存 {len(results)} 条记录（包括历史 + 本次）。")
-print(f"文件路径：{output_csv_path}")
+print(f"\nAll done! Final total saved: {len(results)} records (including history + current run).")
+print(f"File path: {output_csv_path}")
