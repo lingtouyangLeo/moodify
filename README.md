@@ -291,7 +291,7 @@ moodify/
 
 ## Requirements
 
-- **Python**: 3.8+
+- **Python**: 3.12+
 - **Core Libraries**:
   - pandas
   - transformers
