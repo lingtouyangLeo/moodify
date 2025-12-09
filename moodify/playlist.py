@@ -14,7 +14,7 @@ def _get_current_user(access_token: str) -> Tuple[Dict[str, Any] | None, str | N
     try:
         r = requests.get(f"{API_BASE_URL}/me", headers=_auth_headers(access_token))
         if r.status_code != 200:
-            return None, f"获取当前用户失败: {r.status_code} {r.text}"
+            return None, f"Failed to get current user: {r.status_code} {r.text}"
         return r.json(), None
     except Exception as exc:  # pragma: no cover
         return None, str(exc)
@@ -29,7 +29,7 @@ def _create_playlist(access_token: str, user_id: str, name: str, description: st
     try:
         r = requests.post(f"{API_BASE_URL}/users/{user_id}/playlists", headers=_auth_headers(access_token), json=payload)
         if r.status_code not in (200, 201):
-            return None, f"创建歌单失败: {r.status_code} {r.text}"
+            return None, f"Failed to create playlist: {r.status_code} {r.text}"
         return r.json(), None
     except Exception as exc:  # pragma: no cover
         return None, str(exc)
@@ -45,10 +45,10 @@ def _search_track(access_token: str, title: str, artist: str | None = None) -> T
     try:
         r = requests.get(f"{API_BASE_URL}/search", headers=_auth_headers(access_token), params=params)
         if r.status_code != 200:
-            return None, f"搜索失败: {r.status_code} {r.text}"
+            return None, f"Search failed: {r.status_code} {r.text}"
         items = r.json().get("tracks", {}).get("items", [])
         if not items:
-            return None, "未找到匹配歌曲"
+            return None, "No matching track found"
         return items[0]["id"], None
     except Exception as exc:  # pragma: no cover
         return None, str(exc)
@@ -66,7 +66,7 @@ def _add_tracks_to_playlist(access_token: str, playlist_id: str, track_ids: List
             payload = {"uris": batch}
             r = requests.post(f"{API_BASE_URL}/playlists/{playlist_id}/tracks", headers=_auth_headers(access_token), json=payload)
             if r.status_code not in (200, 201):
-                return f"添加歌曲失败: {r.status_code} {r.text}"
+                return f"Failed to add tracks: {r.status_code} {r.text}"
             time.sleep(0.1)
         return None
     except Exception as exc:  # pragma: no cover
@@ -79,9 +79,9 @@ def create_playlist_from_recent(
     playlist_name: str = "Imported Recent Tracks",
     playlist_description: str = "Imported from recent tracks via Moodify",
 ) -> Dict[str, Any]:
-    """根据最近播放列表创建 Spotify 歌单并导入歌曲。
+    """Create a Spotify playlist from the recent-played list and add tracks.
 
-    返回结构示例：
+    Return structure example:
     {
       "success": True/False,
       "playlist_id": str | None,
@@ -94,11 +94,11 @@ def create_playlist_from_recent(
 
     user, err = _get_current_user(access_token)
     if err or not user:
-        return {"success": False, "error": err or "无法获取当前用户"}
+        return {"success": False, "error": err or "Unable to get current user"}
 
     playlist, err = _create_playlist(access_token, user["id"], playlist_name, playlist_description, public=False)
     if err or not playlist:
-        return {"success": False, "error": err or "创建歌单失败"}
+        return {"success": False, "error": err or "Failed to create playlist"}
 
     playlist_id = playlist["id"]
     playlist_url = playlist.get("external_urls", {}).get("spotify")
@@ -115,7 +115,7 @@ def create_playlist_from_recent(
         if track_id:
             track_ids.append(track_id)
         else:
-            not_found.append({"track_name": title, "artist_name": artist, "reason": terr or "未找到匹配"})
+            not_found.append({"track_name": title, "artist_name": artist, "reason": terr or "No match found"})
         time.sleep(0.1)
 
     add_err = _add_tracks_to_playlist(access_token, playlist_id, track_ids)
@@ -147,16 +147,16 @@ def create_playlist_from_recommendations(
 ) -> Dict[str, Any]:
     """Create a playlist from recommended tracks (track_name / artist_name).
 
-    Structure of return value is the same as create_playlist_from_recent.
+    The return value structure is the same as create_playlist_from_recent.
     """
 
     user, err = _get_current_user(access_token)
     if err or not user:
-        return {"success": False, "error": err or "无法获取当前用户"}
+        return {"success": False, "error": err or "Unable to get current user"}
 
     playlist, err = _create_playlist(access_token, user["id"], playlist_name, playlist_description, public=False)
     if err or not playlist:
-        return {"success": False, "error": err or "创建歌单失败"}
+        return {"success": False, "error": err or "Failed to create playlist"}
 
     playlist_id = playlist["id"]
     playlist_url = playlist.get("external_urls", {}).get("spotify")
@@ -180,7 +180,7 @@ def create_playlist_from_recommendations(
         if track_id:
             track_ids.append(track_id)
         else:
-            not_found.append({"track_name": title, "artist_name": artist, "reason": terr or "未找到匹配"})
+            not_found.append({"track_name": title, "artist_name": artist, "reason": terr or "No match found"})
         time.sleep(0.1)
 
     add_err = _add_tracks_to_playlist(access_token, playlist_id, track_ids)

@@ -1,5 +1,6 @@
 import re
 import os
+import time
 from typing import Tuple, List, Dict, Any
 
 # lyricsgenius may not be installed; avoid hard failure on import
@@ -267,4 +268,8 @@ def process_recent_tracks(recent_list: List[Dict[str, Any]]) -> List[Dict[str, A
                 "error": err,
             }
         )
+
+        # Pause between each lyrics fetch to avoid hitting rate limits
+        time.sleep(0.5)
+
     return processed
