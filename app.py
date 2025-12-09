@@ -189,6 +189,37 @@ BASE_HTML_START = """<!DOCTYPE html>
       .footer-links a:hover {
         text-decoration: underline;
       }
+      /* Loading state styles */
+      .loading-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 280px;
+        text-align: center;
+      }
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 4px solid rgba(155, 163, 199, 0.3);
+        border-top-color: #1db954;
+        animation: spin 0.9s linear infinite;
+        margin-bottom: 18px;
+      }
+      .loading-title {
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+      .loading-subtext {
+        font-size: 13px;
+        color: #9ba3c7;
+        max-width: 360px;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
     </style>
   </head>
   <body>
@@ -246,7 +277,8 @@ def callback():
     html = BASE_HTML_START
     html += "<h1>Spotify authorization successful</h1>"
     html += "<p class='tagline'>You're now connected to Spotify. Click the button below to fetch your recent tracks, attach lyrics, and save them for analysis.</p>"
-    html += "<form method='post' action='/fetch_recent'>"
+    # Point this button to the dedicated loading route instead of /fetch_recent directly
+    html += "<form method='get' action='/loading'>"
     html += "<button type='submit' class='primary'>Fetch and process my recent tracks</button>"
     html += "</form>"
     html += "<div class='footer-links'><a href='/'>Back to Home</a></div>"
@@ -271,11 +303,11 @@ def fetch_recent():
     except Exception as exc:
         return (
             BASE_HTML_START
-            + f"""
+            + """
             <h1>Failed to fetch tracks</h1>
-            <p class='note-error'>Failed to fetch recently played tracks: {str(exc)}</p>
+            <p class='note-error'>Failed to fetch recently played tracks: {}</p>
             <div class='footer-links'><a href='/'>Back to Home</a></div>
-            """
+            """.format(str(exc))
             + BASE_HTML_END
         )
 
@@ -328,11 +360,11 @@ def recent_tracks():
     html += "<div class='section'>"
     html += "<div class='section-header'>Generated Files</div>"
     html += "<ul class='file-list'>"
-    html += f"<li><strong>Raw list</strong>: {os.path.basename(raw_json_path)}</li>"
+    html += "<li><strong>Raw list</strong>: {}</li>".format(os.path.basename(raw_json_path))
     if os.path.exists(lyrics_json_path):
-        html += f"<li><strong>With lyrics</strong>: {os.path.basename(lyrics_json_path)}</li>"
+        html += "<li><strong>With lyrics</strong>: {}</li>".format(os.path.basename(lyrics_json_path))
     if os.path.exists(cleaned_csv_path):
-        html += f"<li><strong>Cleaned lyrics CSV</strong>: {os.path.basename(cleaned_csv_path)}</li>"
+        html += "<li><strong>Cleaned lyrics CSV</strong>: {}</li>".format(os.path.basename(cleaned_csv_path))
     html += "</ul>"
     html += "</div>"
 
@@ -351,10 +383,9 @@ def recent_tracks():
         )
         error_text = ""
         if not t.get("clean_lyrics") and t.get("error"):
-            error_text = f" &mdash; <span style='color:#ff7675;font-size:12px;'>({t.get('error')})</span>"
+            error_text = " &mdash; <span style='color:#ff7675;font-size:12px;'>({})</span>".format(t.get("error"))
         html += (
-            f"<li><strong>{title}</strong> &middot; {artist} "
-            f"{status_badge}{error_text}</li>"
+            "<li><strong>{}</strong> &middot; {} {}{}</li>".format(title, artist, status_badge, error_text)
         )
     html += "</ul>"
     html += "</div>"
@@ -391,7 +422,8 @@ def recent_tracks():
     html += "<div class='section'>"
     html += "<div class='section-header'>Refresh Recent Data</div>"
     html += "<p>If you've listened to more music and want to update this view, click below to fetch your latest recent tracks from Spotify again.</p>"
-    html += "<form method='post' action='/fetch_recent'>"
+    # Point refresh button to /loading so the user sees the spinner route
+    html += "<form method='get' action='/loading'>"
     html += "<div class='spacer-md'></div>"
     html += "<button type='submit' class='primary'>Refresh recent data from Spotify</button>"
     html += "</form>"
@@ -434,22 +466,22 @@ def import_playlist():
         error = result.get("error") or "Unknown error"
         html = BASE_HTML_START
         html += "<h1>Failed to import playlist</h1>"
-        html += f"<p class='note-error'>Error while creating playlist or adding tracks: {error}</p>"
+        html += "<p class='note-error'>Error while creating playlist or adding tracks: {}</p>".format(error)
         html += "<div class='footer-links'><a href='/recent'>Back to Recent Tracks</a></div>"
         html += BASE_HTML_END
         return html
 
     html = BASE_HTML_START
     html += "<h1>Playlist imported successfully</h1>"
-    html += f"<p class='tagline'>We created a new Spotify playlist from your recent tracks.</p>"
-    html += f"<p>Created playlist: <strong>{playlist_name}</strong></p>"
+    html += "<p class='tagline'>We created a new Spotify playlist from your recent tracks.</p>"
+    html += "<p>Created playlist: <strong>{}</strong></p>".format(playlist_name)
     if result.get("playlist_url"):
         html += (
-            f"<p>Open in Spotify: "
-            f"<a href='{result['playlist_url']}' target='_blank' class='button secondary'>Open playlist</a></p>"
+            "<p>Open in Spotify: "
+            "<a href='{url}' target='_blank' class='button secondary'>Open playlist</a></p>".format(url=result["playlist_url"])
         )
 
-    html += f"<p>Number of tracks added: <strong>{result.get('added_count', 0)}</strong></p>"
+    html += "<p>Number of tracks added: <strong>{}</strong></p>".format(result.get("added_count", 0))
 
     not_found = result.get("not_found") or []
     if not_found:
@@ -459,8 +491,9 @@ def import_playlist():
         html += "<ul class='not-found-list'>"
         for item in not_found:
             html += (
-                f"<li>{item.get('track_name')} &middot; {item.get('artist_name')} "
-                f"<span style='color:#ff7675;font-size:12px;'>({item.get('reason')})</span></li>"
+                "<li>{} &middot; {} <span style='color:#ff7675;font-size:12px;'>({})</span></li>".format(
+                    item.get("track_name"), item.get("artist_name"), item.get("reason")
+                )
             )
         html += "</ul>"
         html += "</div>"
@@ -491,7 +524,7 @@ def mood_recommend():
         error = result.get("error") or "Unknown error"
         html = BASE_HTML_START
         html += "<h1>Failed to create mood-based playlist</h1>"
-        html += f"<p class='note-error'>Error while creating mood-based recommendation playlist: {error}</p>"
+        html += "<p class='note-error'>Error while creating mood-based recommendation playlist: {}</p>".format(error)
         html += "<div class='footer-links'><a href='/recent'>Back to Recent Tracks</a></div>"
         html += BASE_HTML_END
         return html
@@ -501,15 +534,15 @@ def mood_recommend():
 
     html = BASE_HTML_START
     html += "<h1>Mood-based playlist created</h1>"
-    html += f"<p class='tagline'>We analyzed the mood of your recent tracks and detected an overall emotion: <strong>{overall_emotion}</strong>.</p>"
+    html += "<p class='tagline'>We analyzed the mood of your recent tracks and detected an overall emotion: <strong>{}</strong>.</p>".format(overall_emotion)
 
     if result.get("playlist_url"):
         html += (
-            f"<p>Open the new playlist on Spotify: "
-            f"<a href='{result['playlist_url']}' target='_blank' class='button secondary'>Open playlist</a></p>"
+            "<p>Open the new playlist on Spotify: "
+            "<a href='{url}' target='_blank' class='button secondary'>Open playlist</a></p>".format(url=result["playlist_url"])
         )
 
-    html += f"<p>Number of recommended tracks added: <strong>{result.get('added_count', 0)}</strong></p>"
+    html += "<p>Number of recommended tracks added: <strong>{}</strong></p>".format(result.get("added_count", 0))
 
     if recommended_tracks:
         html += "<div class='section'>"
@@ -517,8 +550,9 @@ def mood_recommend():
         html += "<ul class='track-list'>"
         for t in recommended_tracks:
             html += (
-                f"<li><strong>{t.get('track_name')}</strong> · {t.get('artist_name')} "
-                f"<span style='color:#9ba3c7;font-size:12px;'>(emotion: {t.get('emotion')})</span></li>"
+                "<li><strong>{}</strong> · {} <span style='color:#9ba3c7;font-size:12px;'>(emotion: {})</span></li>".format(
+                    t.get("track_name"), t.get("artist_name"), t.get("emotion")
+                )
             )
         html += "</ul>"
         html += "</div>"
@@ -531,8 +565,9 @@ def mood_recommend():
         html += "<ul class='not-found-list'>"
         for item in not_found:
             html += (
-                f"<li>{item.get('track_name')} · {item.get('artist_name')} "
-                f"<span style='color:#ff7675;font-size:12px;'>({item.get('reason')})</span></li>"
+                "<li>{} · {} <span style='color:#ff7675;font-size:12px;'>({})</span></li>".format(
+                    item.get("track_name"), item.get("artist_name"), item.get("reason")
+                )
             )
         html += "</ul>"
         html += "</div>"
@@ -544,6 +579,40 @@ def mood_recommend():
     return html
 
 
+@app.route("/loading")
+def loading():
+    """Dedicated loading page that shows an animation while /fetch_recent runs.
+
+    This route does not perform heavy work itself; it immediately auto-submits
+    a hidden form that POSTs to /fetch_recent, then relies on that route's
+    redirect to /recent (or its error page) to complete the flow.
+    """
+    return (
+        BASE_HTML_START
+        + """
+        <div class="loading-wrapper">
+          <div class="loading-spinner"></div>
+          <h1 class="loading-title">Fetching your recent tracks...</h1>
+          <div class="loading-subtext">
+            We are talking to Spotify, downloading your recent listening history, and processing lyrics. This may take a few seconds. Please do not close or refresh this page.
+          </div>
+        </div>
+
+        <form id="auto-fetch-form" method="post" action="/fetch_recent" style="display:none;"></form>
+
+        <script>
+          // Automatically submit the hidden fetch_recent form once the loading page is rendered
+          document.addEventListener('DOMContentLoaded', function () {
+            var form = document.getElementById('auto-fetch-form');
+            if (form) {
+              form.submit();
+            }
+          });
+        </script>
+        """
+        + BASE_HTML_END
+    )
+
+
 if __name__ == "__main__":
     app.run(debug=True)
-
