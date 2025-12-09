@@ -1,7 +1,8 @@
 from flask import Flask, redirect, request, url_for, session
 import os
 
-from moodify import spotify, lyrics, storage, playlist
+from moodify import spotify
+from moodify import pipeline
 
 app = Flask(__name__)
 
@@ -241,7 +242,7 @@ def recent_tracks():
         return redirect(url_for("index"))
 
     try:
-        recent_list = spotify.fetch_recently_played(access_token, limit=20)
+        result = pipeline.run_recent_tracks_pipeline(access_token, limit=20)
     except Exception as exc:
         return (
             BASE_HTML_START
@@ -253,17 +254,12 @@ def recent_tracks():
             + BASE_HTML_END
         )
 
+    recent_list = result["recent_list"]
+    processed_tracks = result["processed_tracks"]
+    files = result["files"]
+
     # Cache recent tracks in session for playlist import
     session["recent_list"] = recent_list
-
-    # Save to top-level realtime_data/ folder
-    base_dir = os.path.dirname(__file__)
-    data_dir = os.path.join(base_dir, "realtime_data")
-    os.makedirs(data_dir, exist_ok=True)
-    filepath = storage.save_recent_list(data_dir, recent_list)
-
-    processed_tracks = lyrics.process_recent_tracks(recent_list)
-    saved = storage.save_processed_tracks(data_dir, processed_tracks)
 
     html = BASE_HTML_START
     html += "<h1>Your 20 Most Recent Tracks</h1>"
@@ -272,13 +268,13 @@ def recent_tracks():
     html += "<div class='section'>"
     html += "<div class='section-header'>Generated Files</div>"
     html += "<ul class='file-list'>"
-    html += f"<li><strong>Raw list</strong>: {os.path.basename(filepath)}</li>"
-    html += f"<li><strong>With lyrics</strong>: {os.path.basename(saved['lyrics_json'])}</li>"
-    html += f"<li><strong>Cleaned lyrics CSV</strong>: {os.path.basename(saved['cleaned_csv'])}</li>"
+    html += f"<li><strong>Raw list</strong>: {os.path.basename(files['raw'])}</li>"
+    html += f"<li><strong>With lyrics</strong>: {os.path.basename(files['lyrics_json'])}</li>"
+    html += f"<li><strong>Cleaned lyrics CSV</strong>: {os.path.basename(files['cleaned_csv'])}</li>"
     html += "</ul>"
     html += "</div>"
 
-    if lyrics.genius_client is None:
+    if not result.get("lyrics_enabled"):
         html += "<div class='note-warning'>Note: <code>GENIUS_ACCESS_TOKEN</code> is not configured, so lyrics fetching is currently disabled.</div>"
 
     html += "<div class='section'>"
@@ -300,7 +296,6 @@ def recent_tracks():
     html += "</ul>"
     html += "</div>"
 
-    # Form to import into a Spotify playlist
     html += "<div class='section'>"
     html += "<div class='section-header'>Create Playlist</div>"
     html += "<p>Create a Spotify playlist from these recent tracks in one click.</p>"
@@ -328,30 +323,16 @@ def import_playlist():
         return redirect(url_for("index"))
 
     recent_list = session.get("recent_list")
-    if not recent_list:
-        # Fallback: try to load from realtime_data/recent_tracks.json
-        base_dir = os.path.dirname(__file__)
-        json_path = os.path.join(base_dir, "realtime_data", "recent_tracks.json")
-        if os.path.exists(json_path):
-            import json
-
-            with open(json_path, "r", encoding="utf-8") as f:
-                recent_list = json.load(f)
-        else:
-            return (
-                BASE_HTML_START
-                + """
-                <h1>No recent tracks found</h1>
-                <p class='note-warning'>No recent tracks found for this session. Please visit <code>/recent</code> first to fetch them.</p>
-                <div class='footer-links'><a href='/'>Back to Home</a></div>
-                """
-                + BASE_HTML_END
-            )
 
     playlist_name = request.form.get("playlist_name") or "Imported Recent Tracks"
     description = request.form.get("description") or "Imported from recent tracks via Moodify"
 
-    result = playlist.create_playlist_from_recent(access_token, recent_list, playlist_name, description)
+    result = pipeline.create_playlist_pipeline(
+        access_token,
+        playlist_name=playlist_name,
+        description=description,
+        recent_list=recent_list,
+    )
 
     if not result.get("success"):
         error = result.get("error") or "Unknown error"

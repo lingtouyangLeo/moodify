@@ -2,19 +2,29 @@ import re
 import os
 from typing import Tuple, List, Dict, Any
 
-# lyricsgenius 可能未安装，避免导入报错
+# lyricsgenius may not be installed; avoid hard failure on import
 try:
     import lyricsgenius
 except ImportError:  # pragma: no cover
     lyricsgenius = None
 
-# 可选的 pandas，用于处理缺失值；不存在时用 None 代替
+# Optional pandas, used only for NA handling
 try:
     import pandas as pd  # type: ignore
 except ImportError:  # pragma: no cover
     pd = None
 
-# ======== Genius 歌词配置 ========
+# Try to import langdetect for language identification (mirrors notebook/lyrics_clean.py)
+try:  # pragma: no cover - optional dependency
+    from langdetect import detect_langs, DetectorFactory
+    from langdetect.lang_detect_exception import LangDetectException
+
+    DetectorFactory.seed = 0
+    LANGDETECT_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    LANGDETECT_AVAILABLE = False
+
+# ======== Genius lyrics configuration ========
 GENIUS_ACCESS_TOKEN = "3AhYPPIL5RQbybxGO0UvFk2OH_ZHkiN6w07CVwy9WNrLzxN0qhBDW2rIRkV8041e"
 GENIUS_TIMEOUT = 15
 
@@ -28,7 +38,13 @@ if GENIUS_ACCESS_TOKEN and lyricsgenius:
 else:
     genius_client = None
 
-# ======== 歌词清洗逻辑（与 notebook/lyrics_clean.py 保持一致） ========
+# ======== Cleaning configuration (aligned with notebook/lyrics_clean.py) ========
+REMOVE_SQUARE_BRACKET_COMMENTS = True
+REMOVE_STAGE_COMMENTS = True
+REMOVE_URLS = True
+MIN_CLEAN_LENGTH = 20
+LANGDETECT_EN_PROB_THRESHOLD = 0.90
+
 BAD_KEYWORDS = [
     "you might also like",
     "embed",
@@ -46,30 +62,22 @@ BAD_KEYWORDS = [
 SECTION_HEADER_PATTERN = re.compile(r"^\s*\[.*?\]\s*$")
 
 STAGE_COMMENT_KEYWORDS = [
-    "chorus",
     "verse",
+    "chorus",
     "bridge",
-    "hook",
     "intro",
     "outro",
     "pre-chorus",
+    "pre chorus",
+    "hook",
+    "refrain",
     "post-chorus",
-    "background",
-    "vocals",
-    "beat",
+    "post chorus",
     "instrumental",
-    "guitar",
     "solo",
-    "spoken",
-    "talking",
-    "whisper",
-    "laughs",
-    "applause",
-    "crowd",
 ]
 
 TO_LOWER = True
-REMOVE_STAGE_COMMENTS = True
 
 
 def _is_na(val) -> bool:
@@ -79,38 +87,104 @@ def _is_na(val) -> bool:
 
 
 def is_stage_comment(text: str) -> bool:
-    t = text.strip().lower()
-    if len(t.split()) > 6:
+    """Return True if the parentheses content is a structural/stage direction.
+
+    This mirrors the behavior in notebook/lyrics_clean.py: phrases like
+    "(Verse 1)", "(Chorus)" and short tokens like (v1) are treated as
+    stage comments and removed, while emotional cues like (yeah) are kept.
+    """
+    if not text:
+        return False
+
+    lowered = text.lower().strip()
+
+    keywords = STAGE_COMMENT_KEYWORDS
+
+    for kw in keywords:
+        if kw in lowered:
+            return True
+
+    if len(lowered) <= 4 and all(ch.isalnum() or ch.isspace() for ch in lowered):
         return True
-    return any(k in t for k in STAGE_COMMENT_KEYWORDS)
+
+    return False
 
 
-def clean_lyrics_one_song(text: str) -> str:
-    if _is_na(text):
+def is_english_langdetect(text: str, prob_threshold: float = LANGDETECT_EN_PROB_THRESHOLD) -> bool:
+    """Use langdetect to decide whether the given lyrics text is English.
+
+    If langdetect is not installed or the text is too short / invalid,
+    this function returns False.
+    """
+    if not LANGDETECT_AVAILABLE:
+        return False
+
+    if text is None:
+        return False
+
+    text = str(text).strip()
+    if not text:
+        return False
+
+    if len(text) < 20:
+        return False
+
+    try:  # pragma: no cover - depends on langdetect
+        langs = detect_langs(text)
+    except Exception:  # includes LangDetectException
+        return False
+
+    for lang_prob in langs:
+        if getattr(lang_prob, "lang", None) == "en" and getattr(lang_prob, "prob", 0.0) >= prob_threshold:
+            return True
+
+    return False
+
+
+def clean_lyrics_one_song(raw_lyrics: str) -> str:
+    """Clean lyrics for a single song.
+
+    This implementation is based on notebook/lyrics_clean.py and performs:
+    - line normalization
+    - URL removal
+    - removal of [Chorus], [Verse] style headers
+    - removal of stage comments in parentheses while keeping emotional ones
+    - keyword-based garbage line filtering
+    - lowercasing and character filtering
+    """
+    if _is_na(raw_lyrics):
         return ""
 
-    lines = text.splitlines()
-    cleaned_lines = []
+    text = str(raw_lyrics)
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    lines = text.split("\n")
+    cleaned_lines: List[str] = []
 
     for line in lines:
         line = line.strip()
-        if line == "":
+        if not line:
             continue
+
+        if REMOVE_URLS:
+            line = re.sub(r"http\S+|www\.\S+", "", line).strip()
+            if line == "":
+                continue
 
         lower_line = line.lower()
         if any(k in lower_line for k in BAD_KEYWORDS):
             continue
 
-        if SECTION_HEADER_PATTERN.match(line):
-            continue
-
-        if REMOVE_STAGE_COMMENTS and line.startswith("(") and line.endswith(")"):
-            inner = line[1:-1]
-            if is_stage_comment(inner):
+        if REMOVE_SQUARE_BRACKET_COMMENTS:
+            if SECTION_HEADER_PATTERN.match(line):
+                continue
+            line = re.sub(r"\[.*?\]", "", line).strip()
+            if line == "":
                 continue
 
         if REMOVE_STAGE_COMMENTS:
-            def _handle_paren(m):
+            def _handle_paren(m: re.Match) -> str:
                 inner = m.group(1)
                 if is_stage_comment(inner):
                     return ""
@@ -125,41 +199,30 @@ def clean_lyrics_one_song(text: str) -> str:
     if not cleaned_lines:
         return ""
 
-    merged_lines = []
-    i = 0
-    while i < len(cleaned_lines):
-        line = cleaned_lines[i]
-        if (
-            len(line) == 1
-            and line in {",", ".", "!", "?", ";", ":"}
-            and i > 0
-            and i < len(cleaned_lines) - 1
-        ):
-            prev_line = merged_lines.pop()
-            next_line = cleaned_lines[i + 1]
-            merged_lines.append(prev_line.rstrip() + line + " " + next_line.lstrip())
-            i += 2
-        else:
-            merged_lines.append(line)
-            i += 1
+    joined = "\n".join(cleaned_lines)
 
-    text = "\n".join(merged_lines)
-    text = (
-        text.replace("’", "'")
-            .replace("‘", "'")
-            .replace("“", '"')
-            .replace("”", '"')
-    )
-    text = re.sub(r"[ \t]+", " ", text)
+    joined = joined.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+
     if TO_LOWER:
-        text = text.lower()
-    return text.strip()
+        joined = joined.lower()
+
+    joined = re.sub(r"[^a-z0-9\s\.\,\!\?\'\"\n]", " ", joined)
+
+    joined = re.sub(r"[ \t]+", " ", joined)
+    joined = re.sub(r"\n{2,}", "\n", joined)
+
+    return joined.strip()
 
 
-def fetch_lyrics(track_name: str, artist_name: str) -> Tuple[str, str]:
+def fetch_lyrics(track_name: str, artist_name: str) -> Tuple[str | None, str | None]:
+    """Fetch raw lyrics for a track using the Genius API.
+
+    Returns a tuple (lyrics, error_message). If lyrics is None, error_message
+    contains a human-readable description in English.
+    """
     if genius_client is None:
-        return None, "Genius client is not initialized (missing token or lyricsgenius not installed)."
-    try:
+        return None, "Genius client is not initialized (missing GENIUS_ACCESS_TOKEN or lyricsgenius not installed)."
+    try:  # pragma: no cover - external HTTP
         song = genius_client.search_song(track_name, artist_name)
         if song and isinstance(song.lyrics, str) and song.lyrics.strip():
             return song.lyrics, None
@@ -169,13 +232,23 @@ def fetch_lyrics(track_name: str, artist_name: str) -> Tuple[str, str]:
 
 
 def process_recent_tracks(recent_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """根据 recent_list 拉取并清洗歌词，返回带 clean_lyrics 的列表"""
-    processed = []
+    """Fetch and clean lyrics for a list of recent tracks.
+
+    For each item in recent_list (expected keys: track_name, artist_name),
+    this function fetches lyrics via Genius, cleans them using
+    clean_lyrics_one_song, and returns a new list including
+    "lyrics", "clean_lyrics", and "error" fields.
+    """
+    processed: List[Dict[str, Any]] = []
     for item in recent_list:
         track_name = item.get("track_name")
         artist_name = item.get("artist_name")
         lyrics, err = fetch_lyrics(track_name, artist_name)
         clean_lyrics = clean_lyrics_one_song(lyrics) if lyrics else ""
+
+        if clean_lyrics and len(clean_lyrics) < MIN_CLEAN_LENGTH:
+            err = (err or "") + " | Cleaned lyrics too short"
+
         processed.append(
             {
                 "track_name": track_name,
