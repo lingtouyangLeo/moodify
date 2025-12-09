@@ -232,17 +232,33 @@ def callback():
 
     token_json = spotify.exchange_code_for_token(code)
     session["access_token"] = token_json["access_token"]
-    return redirect(url_for("recent_tracks"))
+
+    # Show a page with an explicit button to fetch and process recent tracks.
+    html = BASE_HTML_START
+    html += "<h1>Spotify authorization successful</h1>"
+    html += "<p class='tagline'>You're now connected to Spotify. Click the button below to fetch your recent tracks, attach lyrics, and save them for analysis.</p>"
+    html += "<form method='post' action='/fetch_recent'>"
+    html += "<button type='submit' class='primary'>Fetch and process my recent tracks</button>"
+    html += "</form>"
+    html += "<div class='footer-links'><a href='/'>Back to Home</a></div>"
+    html += BASE_HTML_END
+    return html
 
 
-@app.route("/recent")
-def recent_tracks():
+@app.route("/fetch_recent", methods=["POST"])
+def fetch_recent():
+    """Explicit action to run the recent-tracks pipeline once and save to realtime_data.
+
+    After this, /recent will read from files under realtime_data/.
+    """
     access_token = session.get("access_token")
     if not access_token:
         return redirect(url_for("index"))
 
     try:
-        result = pipeline.run_recent_tracks_pipeline(access_token, limit=20)
+        # Run pipeline just to generate realtime_data files; we ignore the
+        # in-memory result here and always render /recent from disk.
+        pipeline.run_recent_tracks_pipeline(access_token, limit=20)
     except Exception as exc:
         return (
             BASE_HTML_START
@@ -254,48 +270,87 @@ def recent_tracks():
             + BASE_HTML_END
         )
 
-    recent_list = result["recent_list"]
-    processed_tracks = result["processed_tracks"]
-    files = result["files"]
+    return redirect(url_for("recent_tracks"))
 
-    # Cache recent tracks in session for playlist import
-    session["recent_list"] = recent_list
+
+@app.route("/recent")
+def recent_tracks():
+    """Render recent tracks by reading data from realtime_data on disk.
+
+    This view no longer calls Spotify or the pipeline directly. It expects
+    that /fetch_recent has been run at least once in this session, which
+    populates realtime_data/recent_tracks.json and the processed files.
+    """
+    access_token = session.get("access_token")
+    if not access_token:
+        return redirect(url_for("index"))
+
+    # Read files from realtime_data directory.
+    from moodify import storage  # local import to avoid circulars
+
+    base_dir = pipeline.get_realtime_data_dir()
+    raw_json_path = os.path.join(base_dir, "recent_tracks.json")
+    lyrics_json_path = os.path.join(base_dir, "recent_tracks_with_lyrics.json")
+    cleaned_csv_path = os.path.join(base_dir, "recent_tracks_cleaned.csv")
+
+    if not os.path.exists(raw_json_path):
+        # User hasn't clicked fetch yet.
+        html = BASE_HTML_START
+        html += "<h1>No recent tracks data found</h1>"
+        html += "<p class='note-warning'>You haven't fetched your recent tracks yet. Please go back and click the fetch button after authorizing Spotify.</p>"
+        html += "<div class='footer-links'><a href='/callback'>Back to authorization result</a></div>"
+        html += BASE_HTML_END
+        return html
+
+    # Load the raw recent list from JSON
+    import json
+
+    with open(raw_json_path, "r", encoding="utf-8") as f:
+        recent_list = json.load(f)
+
+    # Load processed tracks (with lyrics / clean_lyrics) if available
+    processed_tracks = storage.load_processed_tracks(base_dir) if hasattr(storage, "load_processed_tracks") else []
 
     html = BASE_HTML_START
     html += "<h1>Your 20 Most Recent Tracks</h1>"
     html += "<p class='tagline'>We fetched your latest listening history, attached lyrics, and saved everything for analysis.</p>"
 
+    # Files section
     html += "<div class='section'>"
     html += "<div class='section-header'>Generated Files</div>"
     html += "<ul class='file-list'>"
-    html += f"<li><strong>Raw list</strong>: {os.path.basename(files['raw'])}</li>"
-    html += f"<li><strong>With lyrics</strong>: {os.path.basename(files['lyrics_json'])}</li>"
-    html += f"<li><strong>Cleaned lyrics CSV</strong>: {os.path.basename(files['cleaned_csv'])}</li>"
+    html += f"<li><strong>Raw list</strong>: {os.path.basename(raw_json_path)}</li>"
+    if os.path.exists(lyrics_json_path):
+        html += f"<li><strong>With lyrics</strong>: {os.path.basename(lyrics_json_path)}</li>"
+    if os.path.exists(cleaned_csv_path):
+        html += f"<li><strong>Cleaned lyrics CSV</strong>: {os.path.basename(cleaned_csv_path)}</li>"
     html += "</ul>"
     html += "</div>"
 
-    if not result.get("lyrics_enabled"):
-        html += "<div class='note-warning'>Note: <code>GENIUS_ACCESS_TOKEN</code> is not configured, so lyrics fetching is currently disabled.</div>"
-
+    # Recently played tracks section (prefer processed_tracks if available)
     html += "<div class='section'>"
     html += "<div class='section-header'>Recently Played Tracks</div>"
     html += "<ul class='track-list'>"
-    for t in processed_tracks:
+    tracks_for_display = processed_tracks or recent_list
+    for t in tracks_for_display:
+        title = t.get("track_name") or t.get("title") or ""
+        artist = t.get("artist_name") or t.get("artist") or ""
         status_badge = (
             "<span class='badge-ok'>Lyrics OK</span>"
             if t.get("clean_lyrics")
-            else f"<span class='badge-failed'>Lyrics failed</span>"
+            else ""
         )
         error_text = ""
         if not t.get("clean_lyrics") and t.get("error"):
             error_text = f" &mdash; <span style='color:#ff7675;font-size:12px;'>({t.get('error')})</span>"
         html += (
-            f"<li><strong>{t.get('track_name')}</strong> &middot; {t.get('artist_name')} "
+            f"<li><strong>{title}</strong> &middot; {artist} "
             f"{status_badge}{error_text}</li>"
         )
     html += "</ul>"
     html += "</div>"
 
+    # Create playlist form (from raw recent_list in memory)
     html += "<div class='section'>"
     html += "<div class='section-header'>Create Playlist</div>"
     html += "<p>Create a Spotify playlist from these recent tracks in one click.</p>"
@@ -309,7 +364,7 @@ def recent_tracks():
     html += "</form>"
     html += "</div>"
 
-    # Mood-based recommendation section
+    # Mood-based recommendation section (works off realtime_data cleaned CSV)
     html += "<div class='section'>"
     html += "<div class='section-header'>Mood-based Recommendations</div>"
     html += "<p>Analyze the mood of your recent tracks, recommend 10 songs with a similar emotion from the labeled library, and create a new playlist.</p>"
@@ -320,6 +375,16 @@ def recent_tracks():
     html += "<input type='text' id='mood_description' name='description' value='Recommended based on the mood of my recent tracks via Moodify'>"
     html += "<div class='spacer-md'></div>"
     html += "<button type='submit' class='primary'>Create Mood-based Playlist</button>"
+    html += "</form>"
+    html += "</div>"
+
+    # Refresh data section: allow user to re-run fetch_recent to update realtime_data
+    html += "<div class='section'>"
+    html += "<div class='section-header'>Refresh Recent Data</div>"
+    html += "<p>If you've listened to more music and want to update this view, click below to fetch your latest recent tracks from Spotify again.</p>"
+    html += "<form method='post' action='/fetch_recent'>"
+    html += "<div class='spacer-md'></div>"
+    html += "<button type='submit' class='primary'>Refresh recent data from Spotify</button>"
     html += "</form>"
     html += "</div>"
 
@@ -336,7 +401,15 @@ def import_playlist():
     if not access_token:
         return redirect(url_for("index"))
 
-    recent_list = session.get("recent_list")
+    # Load recent_list directly from realtime_data json
+    base_dir = pipeline.get_realtime_data_dir()
+    raw_json_path = os.path.join(base_dir, "recent_tracks.json")
+    if not os.path.exists(raw_json_path):
+        return redirect(url_for("recent_tracks"))
+    import json
+
+    with open(raw_json_path, "r", encoding="utf-8") as f:
+        recent_list = json.load(f)
 
     playlist_name = request.form.get("playlist_name") or "Imported Recent Tracks"
     description = request.form.get("description") or "Imported from recent tracks via Moodify"
@@ -464,3 +537,4 @@ def mood_recommend():
 
 if __name__ == "__main__":
     app.run(debug=True)
+
