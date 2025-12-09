@@ -224,6 +224,31 @@ def clean_lyrics_one_song(raw_lyrics: str) -> str:
     return joined.strip()
 
 
+def _normalize_title_for_lyrics(title: str) -> str:
+    """Normalize track title for lyrics search.
+
+    - strips whitespace
+    - removes parentheses and their content, e.g. "Song (Live)" -> "Song"
+    - cuts off anything after dash-like separators ("-", "–", "—")
+    - collapses extra spaces
+    """
+    if not title:
+        return ""
+
+    t = str(title).strip()
+
+    # remove parentheses content
+    t = re.sub(r"\(.*?\)", "", t).strip()
+
+    # cut off after dash separators
+    t = re.split(r"\s[-–—]\s", t)[0].strip()
+
+    # collapse multiple spaces
+    t = re.sub(r"\s+", " ", t)
+
+    return t
+
+
 def fetch_lyrics(track_name: str, artist_name: str) -> Tuple[str | None, str | None]:
     """Fetch raw lyrics for a track using the Genius API.
 
@@ -232,8 +257,11 @@ def fetch_lyrics(track_name: str, artist_name: str) -> Tuple[str | None, str | N
     """
     if genius_client is None:
         return None, "Genius client is not initialized (missing GENIUS_ACCESS_TOKEN or lyricsgenius not installed)."
+
+    normalized_title = _normalize_title_for_lyrics(track_name)
+
     try:  # pragma: no cover - external HTTP
-        song = genius_client.search_song(track_name, artist_name)
+        song = genius_client.search_song(normalized_title, artist_name)
         if song and isinstance(song.lyrics, str) and song.lyrics.strip():
             return song.lyrics, None
         return None, "Lyrics not found or empty."

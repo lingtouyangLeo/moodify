@@ -150,6 +150,33 @@ def _load_labeled_library() -> pd.DataFrame:
     return df
 
 
+def _normalize_name(title: str, artist: str) -> str:
+    """Normalize track + artist into a key used to detect duplicates.
+
+    - lowercases
+    - strips whitespace
+    - removes simple 'feat.' / 'featuring' info and brackets in artist
+    - removes extra spaces
+    """
+    import re
+
+    t = (title or "").strip().lower()
+    a = (artist or "").strip().lower()
+
+    # remove content in parentheses, e.g., 'song (live)' -> 'song'
+    t = re.sub(r"\(.*?\)", "", t).strip()
+    a = re.sub(r"\(.*?\)", "", a).strip()
+
+    # cut off 'feat.' / 'featuring' and things after it in artist
+    a = re.split(r"feat\.|featuring", a)[0].strip()
+
+    # collapse multiple spaces
+    t = re.sub(r"\s+", " ", t)
+    a = re.sub(r"\s+", " ", a)
+
+    return f"{t}::{a}" if (t or a) else ""
+
+
 def recommend_songs_by_overall_emotion(
     overall_emotion: str,
     existing_tracks: List[TrackWithLyrics],
@@ -160,7 +187,13 @@ def recommend_songs_by_overall_emotion(
     # overall_emotion comes from our 5-category mapping; ensure comparable
     target = (overall_emotion or "").lower()
 
-    existing_keys = {f"{t.track_name}::{t.artist_name}" for t in existing_tracks}
+    # build normalized keys for existing tracks to avoid recommending songs
+    # that are effectively the same (ignoring case, feat., parentheses, etc.)
+    existing_keys = {
+        _normalize_name(t.track_name, t.artist_name)
+        for t in existing_tracks
+        if _normalize_name(t.track_name, t.artist_name)
+    }
 
     # filter same emotion first (case-insensitive)
     same = df[df["emotion"].str.lower() == target].copy()
@@ -169,7 +202,12 @@ def recommend_songs_by_overall_emotion(
     else:
         candidates = same
 
-    candidates["_key"] = candidates["track_name"].astype(str) + "::" + candidates["artist_name"].astype(str)
+    # build normalized keys for candidate library rows and drop any that
+    # collide with existing_keys
+    candidates["_key"] = [
+        _normalize_name(str(row["track_name"]), str(row["artist_name"]))
+        for _, row in candidates.iterrows()
+    ]
     candidates = candidates[~candidates["_key"].isin(existing_keys)]
 
     if len(candidates) <= k:
