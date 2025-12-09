@@ -5,6 +5,7 @@ An emotion-aware music recommendation system that analyzes song lyrics to classi
 ## Table of Contents
 
 - [Project Overview](#project-overview)
+- [Web Application](#web-application)
 - [Features](#features)
 - [Dataset](#dataset)
 - [Installation](#installation)
@@ -16,18 +17,21 @@ An emotion-aware music recommendation system that analyzes song lyrics to classi
 
 ## Project Overview
 
-Moodify is a music recommendation system that leverages Natural Language Processing (NLP) to analyze song lyrics and classify tracks based on emotional content. The system processes data from the Spotify Million Playlist Dataset, extracts lyrics, and uses a fine-tuned DistilRoBERTa emotion classification model to assign emotional scores to each song. This enables mood-based playlist generation and emotion-aware music recommendations with evaluation metrics.
+Moodify is a music recommendation system that leverages Natural Language Processing (NLP) to analyze song lyrics and classify tracks based on emotional content. The system processes data from the Spotify Million Playlist Dataset, extracts lyrics, and uses zero-shot classification models to assign emotional scores to each song. This enables mood-based playlist generation and emotion-aware music recommendations.
+
+## Web Application
+
+We've developed a web-based interface for Moodify using Flask, allowing users to interact with the emotion-aware music recommendation system through their browser. The web application provides an intuitive way to generate mood-based playlists and explore emotion-classified songs.
+
+For detailed information about the web application, including setup instructions, API endpoints, and usage examples, please refer to the [Flask App README](README_for_flaskapp.md).
 
 ## Features
 
 - **Data Processing**: Extract top 1000 hit songs from Spotify Million Playlist Dataset using PySpark
 - **Lyrics Extraction**: Automated lyrics scraping from Genius API
-- **Language Filtering**: Filter non-English songs using language detection
 - **Text Cleaning**: Comprehensive lyrics preprocessing and normalization
-- **Emotion Analysis**: Multi-label emotion classification using fine-tuned DistilRoBERTa model
-- **Model Evaluation**: Confusion matrix and accuracy metrics for model performance
+- **Emotion Analysis**: Multi-label emotion classification using Facebook's BART-large-MNLI model
 - **Mood-Based Playlists**: Generate playlists based on five emotion categories: happy, sad, angry, relaxed, and energetic
-- **Smart Recommendations**: Recommend similar songs based on detected mood with duplication avoidance
 
 ## Dataset
 
@@ -51,7 +55,7 @@ cd moodify
 
 2. Install required packages:
 ```bash
-pip install pandas transformers torch lyricsgenius pyspark tqdm langdetect
+pip install pandas transformers torch lyricsgenius pyspark tqdm
 ```
 
 3. Configure Genius API:
@@ -110,78 +114,48 @@ python notebook/lyrics_scraper.py
 
 **File**: `notebook/lyrics_clean.py`
 
-**Purpose**: Preprocess and normalize lyrics text for NLP analysis, filtering out non-English songs.
+**Purpose**: Preprocess and normalize lyrics text for NLP analysis.
 
 **Steps**:
-1. Ensure langdetect is installed:
-```bash
-pip install langdetect
-```
-2. Run the cleaning script:
+1. Run the cleaning script:
 ```bash
 python notebook/lyrics_clean.py
 ```
-3. The script performs:
-   - **Language Detection**: Filters out non-English songs using `langdetect` library (90% confidence threshold)
-   - Removal of non-lyric content (URLs, credits, metadata)
-   - Elimination of structural markers like `[Chorus]`, `[Verse 1]`
-   - Filtering of stage directions `(Verse)`, `(Chorus)`, `(Bridge)` while keeping emotional expressions `(yeah)`, `(oh no)`
-   - Text normalization (lowercase, whitespace, special characters)
-   - Removal of songs with cleaned lyrics shorter than 20 characters
+2. The script performs:
+   - Removal of non-lyric content (credits, metadata, section headers)
+   - Elimination of stage directions like `[Chorus]`, `[Verse 1]`
+   - Filtering of parenthetical comments (keeping emotional shouts)
+   - Text normalization (quotation marks, whitespace, casing)
+   - Optional lowercasing for consistency
 
-**Output**: `data/tracks_with_lyrics_cleaned.csv` (English songs only)
+**Output**: `data/tracks_with_lyrics_cleaned.csv`
 
-**Configuration**:
-- `LANGDETECT_EN_PROB_THRESHOLD = 0.90`: Minimum probability to classify as English
-- `MIN_CLEAN_LENGTH = 20`: Minimum character count for cleaned lyrics
-
-### Stage 4: Emotion Classification and Evaluation
+### Stage 4: Emotion Classification
 
 **File**: `notebook/NLP_Mood.ipynb`
 
-**Purpose**: Classify songs by emotional content, evaluate model performance, and generate mood-based recommendations.
+**Purpose**: Classify songs by emotional content and generate mood-based playlists.
 
 **Steps**:
-1. Install required packages:
+1. Install transformers and PyTorch:
 ```bash
-pip install transformers torch scikit-learn seaborn matplotlib
+pip install transformers torch
 ```
 2. Open `NLP_Mood.ipynb` in Jupyter Notebook or VS Code
 3. Run all cells sequentially
-4. The notebook performs:
-   - **Cell 1**: Install dependencies
-   - **Cell 2**: Emotion classification
-     - Load cleaned lyrics data from `tracks_with_emotionLabels.csv`
-     - Initialize DistilRoBERTa emotion model (`j-hartmann/emotion-english-distilroberta-base`)
-     - Classify lyrics into 7 base emotions (anger, disgust, fear, joy, neutral, sadness, surprise)
-     - Map to 5 target emotions:
-       - `happy` ← joy
-       - `sad` ← sadness
-       - `angry` ← anger
-       - `relaxed` ← neutral
-       - `energetic` ← 0.6 × surprise + 0.4 × joy
-     - Process in batches (batch_size=16) with GPU acceleration if available
-   - **Cell 3**: Model evaluation
-     - Calculate classification accuracy
-     - Generate confusion matrix visualization
-   - **Cell 4**: Playlist generation
-     - Sample 10-20 songs randomly
-     - Calculate dominant mood by averaging emotion scores
-   - **Cell 5**: Smart recommendation
-     - Recommend 5-10 songs matching the playlist mood
-     - Avoid duplicate recommendations
+4. The notebook will:
+   - Load cleaned lyrics data
+   - Initialize Facebook's BART-large-MNLI zero-shot classifier
+   - Classify each song across five emotions: happy, sad, angry, relaxed, energetic
+   - Generate emotion scores and predict dominant emotion
+   - Create a sample mood-based playlist (10-20 songs)
 
-**Output**: 
-- `track_with_pred.csv` (contains 5 emotion scores + predicted emotion for all tracks)
-- Confusion matrix visualization
-- Sample playlist with mood analysis
-- Mood-based recommendations
+**Output**: `tracks_with_emotions.csv` (contains emotion scores for all tracks)
 
 **Notes**:
-- First run will download the DistilRoBERTa model (~290MB, much smaller than BART)
-- Processing 1000 songs takes approximately 10-20 minutes with CPU, 2-5 minutes with GPU
-- GPU acceleration is recommended for faster processing
-- Model requires labeled data in `tracks_with_emotionLabels.csv` for evaluation (Cell 3)
+- First run will download the BART-large-MNLI model (~1.6GB)
+- Processing 1000 songs takes approximately 30-60 minutes depending on hardware
+- GPU acceleration is recommended but not required
 
 ## High-Level Code Logic
 
@@ -234,84 +208,60 @@ Output: tracks_with_lyrics.csv
 ```
 Input: tracks_with_lyrics.csv
 │
-├─ Filter Non-English Songs:
-│  └─ Use langdetect library to detect language
-│     └─ Keep only songs with ≥90% English probability
-│
 For each song's lyrics:
 │  ├─ Split into lines
 │  │
 │  For each line:
-│  │  ├─ Remove URLs (http://, www.)
+│  │  ├─ Remove non-lyric keywords (credits, metadata)
 │  │  ├─ Remove section headers [Chorus], [Verse 1]
 │  │  ├─ Filter stage comments (Bridge), (Background Vocals)
 │  │  ├─ Keep emotional shouts (yeah), (oh no)
 │  │  └─ Normalize whitespace and punctuation
 │  │
-│  ├─ Convert to lowercase
-│  ├─ Remove special characters (keep a-z, 0-9, basic punctuation)
-│  ├─ Collapse multiple spaces and blank lines
+│  ├─ Merge broken punctuation lines
+│  ├─ Normalize quotation marks
+│  ├─ Convert to lowercase (optional)
 │  └─ Return cleaned text
 │
-├─ Filter songs with cleaned lyrics < 20 characters
-└─ Save cleaned English lyrics
+└─ Save cleaned lyrics to new column
 │
-Output: tracks_with_lyrics_cleaned.csv (English only)
+Output: tracks_with_lyrics_cleaned.csv
 ```
 
-**Key Logic**: Implements language detection using `langdetect` to filter out non-English songs before text processing. The library analyzes character n-gram patterns to estimate language probability with deterministic results (seed-fixed). Then applies rule-based text processing to remove non-semantic content while preserving emotional expressions. Uses keyword matching and regex patterns to distinguish between structural annotations and meaningful lyrical content.
+**Key Logic**: Applies rule-based text processing to remove non-semantic content while preserving emotional expressions. Uses keyword matching and regex patterns to distinguish between structural annotations and meaningful lyrical content.
 
 ### 4. Emotion Classification (`NLP_Mood.ipynb`)
 
 ```
-Input: tracks_with_emotionLabels.csv (cleaned lyrics)
+Input: tracks_with_lyrics_cleaned.csv
 │
 ├─ Load cleaned lyrics
 ├─ Filter valid lyrics (length > 20 chars)
-├─ Initialize DistilRoBERTa emotion classifier
-│   └─ Model: j-hartmann/emotion-english-distilroberta-base
-│   └─ Fine-tuned on 6 emotion datasets
+├─ Initialize zero-shot classifier (BART-large-MNLI)
 │
-Base emotions (7): [anger, disgust, fear, joy, neutral, sadness, surprise]
+Define emotion labels: [happy, sad, angry, relaxed, energetic]
 │
-Batch Processing (batch_size=16):
-│  For each batch:
-│  │  ├─ Truncate lyrics to 512 tokens
-│  │  ├─ Run emotion classification
-│  │  │   └─ Model outputs scores for all 7 base emotions
-│  │  ├─ Map 7 base emotions → 5 target emotions:
-│  │  │   ├─ happy = joy
-│  │  │   ├─ sad = sadness
-│  │  │   ├─ angry = anger
-│  │  │   ├─ relaxed = neutral
-│  │  │   └─ energetic = 0.6×surprise + 0.4×joy
-│  │  ├─ Determine dominant emotion (max score)
-│  │  └─ Store: 5 scores + pred_emotion + base_emotion_raw
+For each song:
+│  ├─ Truncate lyrics to 1000 chars
+│  ├─ Run zero-shot classification
+│  │   └─ Model assigns probability to each emotion label
+│  ├─ Extract scores for all emotions
+│  ├─ Determine dominant emotion (highest score)
+│  └─ Store results
 │
-├─ Save results to track_with_pred.csv
-│
-Model Evaluation (if labeled data available):
-│  ├─ Compare predictions vs ground truth
-│  ├─ Calculate accuracy
-│  └─ Generate confusion matrix visualization
+├─ Create emotion score columns (score_happy, score_sad, etc.)
+├─ Save annotated dataset
 │
 Playlist Generation:
 │  ├─ Sample k songs (10-20) randomly
-│  ├─ Calculate mean emotion scores across playlist
-│  ├─ Identify dominant mood (highest average score)
-│  └─ Display playlist with individual emotions
+│  ├─ Calculate mean emotion scores
+│  ├─ Identify dominant mood
+│  └─ Return mood-based playlist
 │
-Smart Recommendation:
-│  ├─ Input: detected mood from playlist
-│  ├─ Filter candidates: same pred_emotion OR high score
-│  ├─ Exclude songs already in playlist
-│  ├─ Sort by mood-specific score (descending)
-│  └─ Return top 5-10 recommendations
-│
-Output: track_with_pred.csv + visualizations + recommendations
+Output: tracks_with_emotions.csv + playlist samples
 ```
 
-**Key Logic**: Uses a specialized DistilRoBERTa model fine-tuned on emotion classification tasks, providing more accurate emotion detection than zero-shot approaches. The model outputs probabilities for 7 base emotions, which are then mapped to 5 musically-relevant categories. The `energetic` emotion is computed as a weighted combination of `surprise` and `joy` to capture high-energy tracks. Batch processing with GPU acceleration enables efficient classification of large datasets. The recommendation system filters songs by predicted emotion and ranks them by emotion-specific confidence scores, avoiding duplicates from the original playlist.
+**Key Logic**: Leverages transformer-based zero-shot classification to map lyrics to emotional categories without requiring labeled training data. The model computes semantic similarity between lyrics and emotion label descriptions, producing a probability distribution across all emotions. Playlist generation aggregates individual track emotions by averaging scores, enabling mood-consistent recommendations.
 
 ### Architecture Flow
 
@@ -321,58 +271,68 @@ Output: track_with_pred.csv + visualizations + recommendations
 [Top 1000 Songs]
     ↓ Genius API
 [Raw Lyrics]
-    ↓ Language detection (langdetect)
-[English Lyrics Only]
-    ↓ Text preprocessing & cleaning
+    ↓ Text preprocessing
 [Clean Lyrics]
-    ↓ DistilRoBERTa Emotion Classification
-[7 Base Emotions] → [5 Target Emotions]
-    ↓ Model evaluation (if labels available)
-[Emotion Scores + Performance Metrics]
+    ↓ BART Zero-Shot Classification
+[Emotion Scores]
     ↓ Aggregation & sampling
 [Mood-Based Playlists]
-    ↓ Mood-aware filtering
-[Smart Recommendations]
 ```
 
 ## Project Structure
 
 ```
 moodify/
+├── app.py                             # Flask web application entry point
+├── requirements.txt                   # Python package dependencies
+├── .env                               # Environment variables (API keys, config)
 ├── data/
 │   ├── top1000HitSongs.json           # Top 1000 tracks from Spotify MPD
 │   ├── tracks_with_lyrics.csv         # Tracks with raw lyrics
-│   └── tracks_with_lyrics_cleaned.csv # Tracks with cleaned lyrics
-├── notebook/
+│   ├── tracks_with_lyrics_cleaned.csv # Tracks with cleaned lyrics
+│   └── tracks_with_emotionLabels.csv  # Tracks with emotion classification
+├── moodify/                           # Core package modules
+│   ├── __init__.py                    # Package initialization
+│   ├── lyrics.py                      # Lyrics fetching and processing
+│   ├── mood.py                        # Emotion classification logic
+│   ├── pipeline.py                    # Data processing pipeline
+│   ├── playlist.py                    # Playlist generation
+│   ├── spotify.py                     # Spotify API integration
+│   └── storage.py                     # Data storage and retrieval
+├── notebook/                          # Jupyter notebooks for analysis
 │   ├── getTopKHitSongs.ipynb          # Stage 1: Extract top tracks
 │   ├── lyrics_scraper.py              # Stage 2: Fetch lyrics from Genius
 │   ├── lyrics_clean.py                # Stage 3: Clean lyrics text
 │   └── NLP_Mood.ipynb                 # Stage 4: Emotion classification
-├── LICENSE
-└── README.md                          # This file
+├── LICENSE                            # MIT License
+├── README.md                          # Main project documentation
+└── README_for_flaskapp.md             # Flask web application guide
 ```
 
 ## Requirements
 
 - **Python**: 3.12+
 - **Core Libraries**:
-  - pandas
-  - transformers
-  - torch
-  - lyricsgenius
-  - pyspark
-  - tqdm
-  - langdetect
-  - scikit-learn (for evaluation)
-  - seaborn (for visualization)
-  - matplotlib (for plotting)
+  - Flask (web framework)
+  - pandas (data manipulation)
+  - transformers (NLP models)
+  - torch (deep learning)
+  - lyricsgenius (lyrics API)
+  - langdetect (language detection)
+  - python-dotenv (environment variables)
+  - requests (HTTP client)
+  - tqdm (progress bars)
+
+- **Optional for Data Processing**:
+  - pyspark (large-scale data processing)
 
 - **APIs**:
-  - Genius API access token (free registration)
+  - Genius API access token (for lyrics scraping - [Get one here](https://genius.com/api-clients))
+  - Spotify API credentials (optional - for playlist integration)
 
 - **Hardware**:
   - Minimum: 8GB RAM, CPU
-  - Recommended: 16GB RAM, NVIDIA GPU for faster inference
+  - Recommended: 16GB RAM, NVIDIA GPU for faster emotion classification
 
 ## License
 
