@@ -1,121 +1,177 @@
-# If you are on Colab, make sure pandas is installed
-# !pip install pandas
-
-import pandas as pd
-import re
-
-# ============ 1. Configuration Section (modify as needed) ============
-
-
 import os
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+import re
+import string
+import pandas as pd
 
+# Try to import langdetect for language identification
+try:
+    from langdetect import detect_langs, DetectorFactory
+    from langdetect.lang_detect_exception import LangDetectException
+
+    # Fix seed to make detection results deterministic
+    DetectorFactory.seed = 0
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    LANGDETECT_AVAILABLE = False
+
+
+# ============ 1. CONFIGURATION ============
+
+# Directory of this file
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Project root = parent directory of current file
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 
+# Input / Output CSV paths
 INPUT_CSV_PATH = os.path.join(PROJECT_ROOT, "data", "tracks_with_lyrics.csv")
 OUTPUT_CSV_PATH = os.path.join(PROJECT_ROOT, "data", "tracks_with_lyrics_cleaned.csv")
 
-
-# Whether to convert lyrics to lowercase (recommended: True, helpful for sentiment classification & vectorization)
-TO_LOWER = True
-
-# Whether to remove “stage-direction style text” in parentheses (but keep emotional shouts)
-# Examples removed: (Chorus), (Verse 2), (Bridge), (Background Vocals)
-# Examples kept: (yeah), (oh no)
+# Remove bracket comments like [Chorus], [Verse 1]
+REMOVE_SQUARE_BRACKET_COMMENTS = True
+# Remove stage/direction comments in parentheses: (Verse), (Chorus), (Bridge)
 REMOVE_STAGE_COMMENTS = True
+# Remove URLs in lyrics
+REMOVE_URLS = True
+
+# Minimum cleaned lyric length; rows below this threshold will be dropped
+MIN_CLEAN_LENGTH = 20
+
+# Minimum probability for langdetect to consider the text as English
+LANGDETECT_EN_PROB_THRESHOLD = 0.90
 
 
-# ============ 2. Patterns and Keywords ============
-
-# Non-lyrics / website hints / production info etc. (matched after lowercasing)
-BAD_KEYWORDS = [
-    "you might also like",
-    "embed",
-    "track info",
-    "more on genius",
-    "lyrics powered by",
-    "produced by",
-    "written by",
-    "composed by",
-    "recorded at",
-    "mastered by",
-    "engineered by",
-]
-
-# [Chorus] / [Verse 1] / [Bridge] etc. section labels
-SECTION_HEADER_PATTERN = re.compile(r"^\s*\[.*?\]\s*$")
-
-# Typical keywords indicating “stage-direction style” parenthetical content
-STAGE_COMMENT_KEYWORDS = [
-    "chorus", "verse", "bridge", "hook", "intro", "outro",
-    "pre-chorus", "post-chorus",
-    "background", "vocals", "beat", "instrumental",
-    "guitar", "solo", "spoken", "talking", "whisper",
-    "laughs", "applause", "crowd",
-]
-
+# ============ 2. UTILITY FUNCTIONS ============
 
 def is_stage_comment(text: str) -> bool:
     """
-    Determine whether the content inside parentheses is stage direction
-    rather than an emotional shout.
-    Example: Chorus, Background Vocals -> True
-             yeah, oh no -> False
+    Determine whether the parentheses content is a stage direction,
+    such as (Verse), (Chorus), (Intro), (Bridge), etc.
+    If true → remove; otherwise keep (e.g., emotional cues like (yeah), (oh no)).
     """
-    t = text.strip().lower()
-    # Very long descriptions are usually stage directions (e.g., background talking…)
-    if len(t.split()) > 6:
+    if not text:
+        return False
+
+    lowered = text.lower().strip()
+
+    # Common structural/stage keywords
+    keywords = [
+        "verse", "chorus", "bridge", "intro", "outro",
+        "pre-chorus", "pre chorus", "hook",
+        "refrain", "post-chorus", "post chorus",
+        "instrumental", "solo"
+    ]
+
+    # Contains structural markers like "verse 1", "chorus 2"
+    for kw in keywords:
+        if kw in lowered:
+            return True
+
+    # Very short tokens like (v1), (c), (b) → likely structure markers
+    if len(lowered) <= 4 and all(ch.isalnum() or ch.isspace() for ch in lowered):
         return True
-    return any(k in t for k in STAGE_COMMENT_KEYWORDS)
+
+    return False
 
 
-def clean_lyrics_one_song(text: str) -> str:
-    """Clean lyrics for a single song and return the cleaned string"""
-    if pd.isna(text):
-        return text
+def is_english_langdetect(text: str,
+                          prob_threshold: float = LANGDETECT_EN_PROB_THRESHOLD) -> bool:
+    """
+    Use langdetect to decide whether the given text is English.
 
-    # -------- 2.1 Split lines and process line-by-line --------
-    lines = text.splitlines()
+    Logic:
+        - Use detect_langs(text) to get language probabilities
+        - If 'en' appears and its probability >= prob_threshold → consider it English
+        - If detection fails or langdetect is not available → return False
+
+    Args:
+        text: Lyrics text
+        prob_threshold: minimum probability for English
+
+    Returns:
+        bool: True if text is considered English, False otherwise
+    """
+    if not LANGDETECT_AVAILABLE:
+        # If langdetect is not installed, we fail closed (treat as non-English)
+        return False
+
+    if text is None:
+        return False
+
+    # Convert to string and strip
+    text = str(text).strip()
+    if not text:
+        return False
+
+    # langdetect works better with a bit of length; short strings are unreliable
+    # You can tweak this if you want to keep very short lyrics
+    if len(text) < 20:
+        return False
+
+    try:
+        langs = detect_langs(text)
+    except LangDetectException:
+        # Happens when text is too short or not informative
+        return False
+
+    for lang_prob in langs:
+        # lang_prob is something like: "en:0.999996"
+        if lang_prob.lang == "en" and lang_prob.prob >= prob_threshold:
+            return True
+
+    return False
+
+
+def clean_lyrics_one_song(raw_lyrics: str) -> str:
+    """
+    Clean the lyrics of a single song.
+
+    Steps:
+        1. Normalize line breaks
+        2. Process line by line:
+           - Remove URLs
+           - Remove [Verse], [Chorus] sections
+           - Remove stage comments like (Chorus)
+           - Keep emotional cues like (yeah)
+        3. Convert to lowercase
+        4. Keep only allowed characters (letters, digits, basic punctuation)
+        5. Collapse extra spaces and blank lines
+    """
+    if pd.isna(raw_lyrics):
+        return ""
+
+    text = str(raw_lyrics)
+
+    # Normalize line breaks
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    lines = text.split("\n")
     cleaned_lines = []
 
     for line in lines:
-        original_line = line
         line = line.strip()
-
-        # Skip empty lines (will normalize later)
-        if line == "":
+        if not line:
             continue
 
-        lower_line = line.lower()
-
-        # ① Remove clearly non-lyric garbage lines (hints / credits)
-        if any(k in lower_line for k in BAD_KEYWORDS):
-            continue
-
-        # ② Remove structural labels like [Chorus] / [Verse 1]
-        if SECTION_HEADER_PATTERN.match(line):
-            continue
-
-        # ③ Optionally remove whole-line stage comments in parentheses
-        #    Examples: (Chorus), (Bridge), (Background Vocals)
-        if REMOVE_STAGE_COMMENTS and line.startswith("(") and line.endswith(")"):
-            inner = line[1:-1]
-            if is_stage_comment(inner):
-                # This is something like (Chorus) → drop entire line
+        # Remove URLs
+        if REMOVE_URLS:
+            line = re.sub(r"http\S+|www\.\S+", "", line).strip()
+            if line == "":
                 continue
 
-        # ④ Parentheses inside the line: remove stage comments but keep emotional shouts
-        #    Example kept: I said (yeah!) I love you
-        #    Example removed: (Background Vocals: la la la)
+        # Remove [Chorus], [Verse], etc.
+        if REMOVE_SQUARE_BRACKET_COMMENTS:
+            line = re.sub(r"\[.*?\]", "", line).strip()
+            if line == "":
+                continue
+
+        # Remove (Verse), (Chorus) but keep emotional parentheses
         if REMOVE_STAGE_COMMENTS:
             def _handle_paren(m):
                 inner = m.group(1)
                 if is_stage_comment(inner):
-                    # Remove stage-direction parentheses
-                    return ""
+                    return ""  # remove stage comment
                 else:
-                    # Keep emotional parentheses (e.g., (yeah), (oh no))
-                    return m.group(0)
+                    return m.group(0)  # keep emotional/textual parentheses
 
             line = re.sub(r"\((.*?)\)", _handle_paren, line).strip()
             if line == "":
@@ -123,67 +179,90 @@ def clean_lyrics_one_song(text: str) -> str:
 
         cleaned_lines.append(line)
 
-    # If everything was removed, return empty string
-    if not cleaned_lines:
-        return ""
+    joined = "\n".join(cleaned_lines)
 
-    # -------- 2.2 Merge broken punctuation-only lines (simple version) --------
-    merged_lines = []
-    i = 0
-    while i < len(cleaned_lines):
-        line = cleaned_lines[i]
+    # Lowercase
+    joined = joined.lower()
 
-        # If line contains only punctuation and is between two non-empty lines → merge
-        if (
-            len(line) == 1
-            and line in {",", ".", "!", "?", ";", ":"}
-            and i > 0
-            and i < len(cleaned_lines) - 1
-        ):
-            prev_line = merged_lines.pop()
-            next_line = cleaned_lines[i + 1]
-            merged = prev_line.rstrip() + line + " " + next_line.lstrip()
-            merged_lines.append(merged)
-            i += 2  # Skip next line
-        else:
-            merged_lines.append(line)
-            i += 1
+    # Keep letters, digits, basic punctuation, spaces, newlines
+    joined = re.sub(r"[^a-z0-9\s\.\,\!\?\'\"\n]", " ", joined)
 
-    text = "\n".join(merged_lines)
+    # Collapse multiple spaces
+    joined = re.sub(r"[ \t]+", " ", joined)
+    # Collapse multiple blank lines
+    joined = re.sub(r"\n{2,}", "\n", joined)
 
-    # -------- 2.3 Normalize symbols, whitespace, casing --------
-    # Normalize various quotation marks
-    text = (
-        text.replace("’", "'")
-            .replace("‘", "'")
-            .replace("“", '"')
-            .replace("”", '"')
-    )
-
-    # Remove extra spaces (but keep line breaks)
-    text = re.sub(r"[ \t]+", " ", text)
-
-    # Optionally lowercase all lyrics (helps sentiment analysis & embedding)
-    if TO_LOWER:
-        text = text.lower()
-
-    return text.strip()
+    return joined.strip()
 
 
-# ============ 3. Read CSV, batch-clean, and save ============
+# ============ 3. MAIN EXECUTION ============
 
-print(f"Reading CSV: {INPUT_CSV_PATH}")
-df = pd.read_csv(INPUT_CSV_PATH)
+if __name__ == "__main__":
+    if not LANGDETECT_AVAILABLE:
+        raise ImportError(
+            "langdetect is not installed. Please install it first:\n\n"
+            "    pip install langdetect\n"
+        )
 
-if "lyrics" not in df.columns:
-    raise ValueError("The current CSV does not contain the 'lyrics' column. Please check file column names.")
+    print(f"Reading CSV: {INPUT_CSV_PATH}")
+    if not os.path.exists(INPUT_CSV_PATH):
+        raise FileNotFoundError(f"Input CSV not found at: {INPUT_CSV_PATH}")
 
-# Create new column: clean_lyrics
-df["clean_lyrics"] = df["lyrics"].apply(clean_lyrics_one_song)
+    df = pd.read_csv(INPUT_CSV_PATH)
 
-# Optionally keep only required columns for future processing:
-df = df[["track_name", "artist_name", "play_count", "clean_lyrics"]]
+    if "lyrics" not in df.columns:
+        raise ValueError("The CSV does not contain the column 'lyrics'. Please check the file.")
 
-df.to_csv(OUTPUT_CSV_PATH, index=False)
-print(f"Cleaned CSV saved to: {OUTPUT_CSV_PATH}")
-print(df[["track_name", "artist_name", "clean_lyrics"]].head())
+    # Drop rows with NaN lyrics early
+    df = df[df["lyrics"].notna()].reset_index(drop=True)
+
+    # 1️⃣ Keep only English songs based on langdetect
+    print("Detecting language with langdetect and filtering to English songs only...")
+    df["is_english"] = df["lyrics"].apply(is_english_langdetect)
+    df = df[df["is_english"]].reset_index(drop=True)
+    df = df.drop(columns=["is_english"])
+
+    print(f"Remaining rows after English filtering: {len(df)}")
+
+    if len(df) == 0:
+        raise ValueError(
+            "No English songs remain after langdetect-based filtering. "
+            "You may want to lower LANGDETECT_EN_PROB_THRESHOLD or inspect the data."
+        )
+
+    # 2️⃣ Clean lyrics
+    print("Cleaning lyrics...")
+    df["clean_lyrics"] = df["lyrics"].apply(clean_lyrics_one_song)
+
+    # 3️⃣ Drop empty or very short clean lyrics
+    df = df[df["clean_lyrics"].notna()]
+    df["clean_lyrics"] = df["clean_lyrics"].astype(str).str.strip()
+    df = df[df["clean_lyrics"] != ""]
+    df = df[df["clean_lyrics"].str.len() >= MIN_CLEAN_LENGTH].reset_index(drop=True)
+
+    print(f"Remaining rows after cleaning: {len(df)}")
+
+    if len(df) == 0:
+        raise ValueError(
+            "All songs were removed after cleaning. "
+            "Adjust cleaning rules or MIN_CLEAN_LENGTH."
+        )
+
+    # 4️⃣ Keep relevant columns if they exist
+    keep_cols = []
+    for col in ["track_name", "artist_name", "play_count", "lyrics", "clean_lyrics"]:
+        if col in df.columns:
+            keep_cols.append(col)
+
+    if not keep_cols:
+        keep_cols = ["clean_lyrics"]
+
+    df = df[keep_cols]
+
+    # 5️⃣ Save cleaned CSV
+    os.makedirs(os.path.dirname(OUTPUT_CSV_PATH), exist_ok=True)
+    df.to_csv(OUTPUT_CSV_PATH, index=False)
+
+    print(f"Saved cleaned CSV to: {OUTPUT_CSV_PATH}")
+    print("Preview:")
+    print(df.head())
