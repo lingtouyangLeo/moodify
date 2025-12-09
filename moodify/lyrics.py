@@ -25,7 +25,16 @@ except ImportError:  # pragma: no cover
     LANGDETECT_AVAILABLE = False
 
 # ======== Genius lyrics configuration ========
-GENIUS_ACCESS_TOKEN = "3AhYPPIL5RQbybxGO0UvFk2OH_ZHkiN6w07CVwy9WNrLzxN0qhBDW2rIRkV8041e"
+# GENIUS_ACCESS_TOKEN = "3AhYPPIL5RQbybxGO0UvFk2OH_ZHkiN6w07CVwy9WNrLzxN0qhBDW2rIRkV8041e"
+
+GENIUS_ACCESS_TOKEN = os.getenv("GENIUS_ACCESS_TOKEN")
+if not GENIUS_ACCESS_TOKEN:
+    raise RuntimeError(
+        "Missing genius_client. "
+        "Set them in your environment or .env file."
+    )
+
+
 GENIUS_TIMEOUT = 15
 
 if GENIUS_ACCESS_TOKEN and lyricsgenius:

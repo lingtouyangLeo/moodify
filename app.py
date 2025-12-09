@@ -1,12 +1,21 @@
 from flask import Flask, redirect, request, url_for, session
 import os
+from dotenv import load_dotenv
+load_dotenv()
+CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback")
+print("DEBUG SPOTIFY_CLIENT_ID:", CLIENT_ID)
+print("DEBUG SPOTIFY_REDIRECT_URI:", REDIRECT_URI)
 
 from moodify import spotify
 from moodify import pipeline
 
 app = Flask(__name__)
 
-app.secret_key = "replace_with_your_own_secret_key"
+# app.secret_key = "replace_with_your_own_secret_key"
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")
+
 
 BASE_HTML_START = """<!DOCTYPE html>
 <html lang='en'>

@@ -3,10 +3,24 @@ import requests
 import urllib.parse
 from typing import Dict, Any, List
 
-CLIENT_ID = "b1afb850862a4e009d4fb92c9afed3b7"
-CLIENT_SECRET = "c225b9248b18400ead7b085fbab985f4"
-REDIRECT_URI = "http://127.0.0.1:5000/callback"
+# CLIENT_ID = "b1afb850862a4e009d4fb92c9afed3b7"
+# CLIENT_SECRET = "c225b9248b18400ead7b085fbab985f4"
+# REDIRECT_URI = "http://127.0.0.1:5000/callback"
+# SCOPE = "user-read-recently-played playlist-modify-public playlist-modify-private"
+
+import os
+
+CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback")
 SCOPE = "user-read-recently-played playlist-modify-public playlist-modify-private"
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    raise RuntimeError(
+        "Missing SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_SECRET. "
+        "Set them in your environment or .env file."
+    )
+
 
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -33,6 +47,7 @@ def exchange_code_for_token(code: str) -> Dict[str, Any]:
         "client_secret": CLIENT_SECRET,
     }
     r = requests.post(TOKEN_URL, data=data)
+    # print("DEBUG token response:", r.status_code, r.text)
     r.raise_for_status()
     return r.json()
 
