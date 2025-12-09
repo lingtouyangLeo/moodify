@@ -26,16 +26,46 @@ def get_realtime_data_dir(base_dir: str | None = None) -> str:
     return data_dir
 
 
+def dedupe_recent_tracks(recent_list: List[Dict[str, Any]], limit: int = 20) -> List[Dict[str, Any]]:
+    """Deduplicate recent tracks by (track_name, artist_name), preserving order.
+
+    - Normalizes track_name and artist_name using strip() + lower().
+    - Keeps the first occurrence of each (track_name, artist_name) pair.
+    - Stops once `limit` items have been collected.
+    """
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+
+    for item in recent_list:
+        if len(deduped) >= limit:
+            break
+
+        title = (item.get("track_name") or item.get("title") or "").strip()
+        artist = (item.get("artist_name") or item.get("artist") or "").strip()
+        key = f"{title.lower()}|||{artist.lower()}" if title or artist else None
+
+        # If we have a non-empty key, use it for de-duplication; otherwise, keep the row as-is.
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+
+        deduped.append(item)
+
+    return deduped
+
+
 def run_recent_tracks_pipeline(access_token: str, limit: int = 20, base_dir: str | None = None) -> Dict[str, Any]:
     """End-to-end pipeline: fetch recent tracks, attach & clean lyrics, save to realtime_data.
 
     Returns a dictionary containing:
-      - recent_list: the raw recent track dicts
+      - recent_list: the raw recent track dicts after de-duplication
       - processed_tracks: track dicts with lyrics/clean_lyrics/error
       - files: paths of saved JSON/CSV files
       - lyrics_enabled: whether Genius client is configured
     """
     recent_list = spotify.fetch_recently_played(access_token, limit=limit)
+    recent_list = dedupe_recent_tracks(recent_list, limit=limit)
     processed_tracks = lyrics.process_recent_tracks(recent_list)
 
     data_dir = get_realtime_data_dir(base_dir)
