@@ -41,6 +41,8 @@ def fetch_recently_played(access_token: str, limit: int = 20) -> List[Dict[str, 
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"limit": limit}
     r = requests.get(f"{API_BASE_URL}/me/player/recently-played", headers=headers, params=params)
+
+    print("DEBUG status:", r.status_code, "body:", r.text)  # 临时加一行
     r.raise_for_status()
     items = r.json().get("items", [])
 

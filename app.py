@@ -309,6 +309,20 @@ def recent_tracks():
     html += "</form>"
     html += "</div>"
 
+    # Mood-based recommendation section
+    html += "<div class='section'>"
+    html += "<div class='section-header'>Mood-based Recommendations</div>"
+    html += "<p>Analyze the mood of your recent tracks, recommend 10 songs with a similar emotion from the labeled library, and create a new playlist.</p>"
+    html += "<form method='post' action='/mood_recommend'>"
+    html += "<label for='mood_playlist_name'>Playlist name</label>"
+    html += "<input type='text' id='mood_playlist_name' name='playlist_name' value='Mood-based Recommendations from Recent'>"
+    html += "<label for='mood_description'>Description</label>"
+    html += "<input type='text' id='mood_description' name='description' value='Recommended based on the mood of my recent tracks via Moodify'>"
+    html += "<div class='spacer-md'></div>"
+    html += "<button type='submit' class='primary'>Create Mood-based Playlist</button>"
+    html += "</form>"
+    html += "</div>"
+
     html += "<div class='footer-links'><a href='/'>Back to Home</a></div>"
 
     html += BASE_HTML_END
@@ -364,6 +378,78 @@ def import_playlist():
         for item in not_found:
             html += (
                 f"<li>{item.get('track_name')} &middot; {item.get('artist_name')} "
+                f"<span style='color:#ff7675;font-size:12px;'>({item.get('reason')})</span></li>"
+            )
+        html += "</ul>"
+        html += "</div>"
+
+    html += "<div class='footer-links'><a href='/recent'>Back to Recent Tracks</a></div>"
+
+    html += BASE_HTML_END
+
+    return html
+
+
+@app.route("/mood_recommend", methods=["POST"])
+def mood_recommend():
+    access_token = session.get("access_token")
+    if not access_token:
+        return redirect(url_for("index"))
+
+    playlist_name = request.form.get("playlist_name") or "Mood-based Recommendations from Recent"
+    description = request.form.get("description") or "Recommended based on the mood of my recent tracks via Moodify"
+
+    result = pipeline.create_mood_playlist_pipeline(
+        access_token,
+        playlist_name=playlist_name,
+        description=description,
+    )
+
+    if not result.get("success"):
+        error = result.get("error") or "Unknown error"
+        html = BASE_HTML_START
+        html += "<h1>Failed to create mood-based playlist</h1>"
+        html += f"<p class='note-error'>Error while creating mood-based recommendation playlist: {error}</p>"
+        html += "<div class='footer-links'><a href='/recent'>Back to Recent Tracks</a></div>"
+        html += BASE_HTML_END
+        return html
+
+    overall_emotion = result.get("overall_emotion") or "unknown"
+    recommended_tracks = result.get("recommended_tracks") or []
+
+    html = BASE_HTML_START
+    html += "<h1>Mood-based playlist created</h1>"
+    html += f"<p class='tagline'>We analyzed the mood of your recent tracks and detected an overall emotion: <strong>{overall_emotion}</strong>.</p>"
+
+    if result.get("playlist_url"):
+        html += (
+            f"<p>Open the new playlist on Spotify: "
+            f"<a href='{result['playlist_url']}' target='_blank' class='button secondary'>Open playlist</a></p>"
+        )
+
+    html += f"<p>Number of recommended tracks added: <strong>{result.get('added_count', 0)}</strong></p>"
+
+    if recommended_tracks:
+        html += "<div class='section'>"
+        html += "<div class='section-header'>Recommended Tracks</div>"
+        html += "<ul class='track-list'>"
+        for t in recommended_tracks:
+            html += (
+                f"<li><strong>{t.get('track_name')}</strong> · {t.get('artist_name')} "
+                f"<span style='color:#9ba3c7;font-size:12px;'>(emotion: {t.get('emotion')})</span></li>"
+            )
+        html += "</ul>"
+        html += "</div>"
+
+    not_found = result.get("not_found") or []
+    if not_found:
+        html += "<div class='section'>"
+        html += "<div class='section-header'>Unmatched Tracks</div>"
+        html += "<p>The following recommended songs could not be matched on Spotify:</p>"
+        html += "<ul class='not-found-list'>"
+        for item in not_found:
+            html += (
+                f"<li>{item.get('track_name')} · {item.get('artist_name')} "
                 f"<span style='color:#ff7675;font-size:12px;'>({item.get('reason')})</span></li>"
             )
         html += "</ul>"

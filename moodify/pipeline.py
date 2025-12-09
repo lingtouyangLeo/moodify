@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List
 
 from . import spotify, lyrics, storage, playlist
+from . import mood
 
 
 def get_project_root() -> str:
@@ -84,3 +85,58 @@ def create_playlist_pipeline(
     )
 
 
+def create_mood_playlist_pipeline(
+    access_token: str,
+    playlist_name: str | None = None,
+    description: str | None = None,
+    base_dir: str | None = None,
+) -> Dict[str, Any]:
+    """Run mood analysis on recent_tracks_cleaned.csv and create a mood-based recommendation playlist.
+
+    This pipeline does **not** refetch recent tracks. It assumes
+    realtime_data/recent_tracks_cleaned.csv already exists.
+    """
+
+    try:
+        tracks_with_emotion = mood.predict_emotion_for_recent_tracks()
+        overall_emotion = mood.infer_overall_emotion(tracks_with_emotion)
+
+        recommended_tracks = mood.recommend_songs_by_overall_emotion(
+            overall_emotion,
+            existing_tracks=tracks_with_emotion,
+            k=10,
+        )
+
+        final_playlist_name = playlist_name or f"Moodify: {overall_emotion.title()} Picks"
+        final_description = description or f"10 songs recommended based on the {overall_emotion} mood of my recent tracks via Moodify."
+
+        playlist_result = playlist.create_playlist_from_recommendations(
+            access_token,
+            recommended_tracks,
+            playlist_name=final_playlist_name,
+            playlist_description=final_description,
+        )
+
+        return {
+            "success": bool(playlist_result.get("success")),
+            "overall_emotion": overall_emotion,
+            "tracks_with_emotion": [t.__dict__ for t in tracks_with_emotion],
+            "recommended_tracks": recommended_tracks,
+            "playlist_id": playlist_result.get("playlist_id"),
+            "playlist_url": playlist_result.get("playlist_url"),
+            "added_count": playlist_result.get("added_count", 0),
+            "not_found": playlist_result.get("not_found", []),
+            "error": playlist_result.get("error"),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "overall_emotion": None,
+            "tracks_with_emotion": None,
+            "recommended_tracks": None,
+            "playlist_id": None,
+            "playlist_url": None,
+            "added_count": 0,
+            "not_found": [],
+            "error": str(exc),
+        }

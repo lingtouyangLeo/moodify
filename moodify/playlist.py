@@ -138,3 +138,67 @@ def create_playlist_from_recent(
         "error": None,
     }
 
+
+def create_playlist_from_recommendations(
+    access_token: str,
+    recommended_tracks: List[Dict[str, Any]],
+    playlist_name: str = "Mood-based Recommendations from Recent",
+    playlist_description: str = "Recommended based on the mood of my recent tracks via Moodify",
+) -> Dict[str, Any]:
+    """Create a playlist from recommended tracks (track_name / artist_name).
+
+    Structure of return value is the same as create_playlist_from_recent.
+    """
+
+    user, err = _get_current_user(access_token)
+    if err or not user:
+        return {"success": False, "error": err or "无法获取当前用户"}
+
+    playlist, err = _create_playlist(access_token, user["id"], playlist_name, playlist_description, public=False)
+    if err or not playlist:
+        return {"success": False, "error": err or "创建歌单失败"}
+
+    playlist_id = playlist["id"]
+    playlist_url = playlist.get("external_urls", {}).get("spotify")
+
+    track_ids: List[str] = []
+    not_found: List[Dict[str, str]] = []
+
+    for item in recommended_tracks:
+        # allow pre-specified spotify_track_id from CSV
+        direct_id = (item.get("spotify_track_id") or item.get("track_id") or "").strip()
+        if direct_id:
+            track_ids.append(direct_id)
+            continue
+
+        title = (item.get("track_name") or "").strip()
+        artist = (item.get("artist_name") or "").strip()
+        if not title:
+            continue
+
+        track_id, terr = _search_track(access_token, title, artist)
+        if track_id:
+            track_ids.append(track_id)
+        else:
+            not_found.append({"track_name": title, "artist_name": artist, "reason": terr or "未找到匹配"})
+        time.sleep(0.1)
+
+    add_err = _add_tracks_to_playlist(access_token, playlist_id, track_ids)
+    if add_err:
+        return {
+            "success": False,
+            "playlist_id": playlist_id,
+            "playlist_url": playlist_url,
+            "added_count": len(track_ids),
+            "not_found": not_found,
+            "error": add_err,
+        }
+
+    return {
+        "success": True,
+        "playlist_id": playlist_id,
+        "playlist_url": playlist_url,
+        "added_count": len(track_ids),
+        "not_found": not_found,
+        "error": None,
+    }
